@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TravelPlan</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a73e8">
+    <link rel="stylesheet" href="style.css">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+</head>
+<body>
+    <header>
+        <div class="logo">
+            TravelPlan
+        </div>
+        <nav style="flex: 1; display: flex; justify-content: flex-end;">
+            <ul style="align-items: center;">
+                <li><a href="#" class="active" id="nav-plan">내 일정</a></li>
+                <li><a href="#" id="nav-community">커뮤니티</a></li>
+                <li id="nav-my-routes-li" style="display:none;"><a href="my_routes.html" id="nav-my-routes">내가 작성한 루트</a></li>
+                <li class="user-profile-li" style="margin-left: 1rem;">
+                    <span id="userInfo" style="display:none; margin-right:10px; font-size:0.9rem;"></span>
+                    <button id="loginBtn" class="btn-google-login">로그인</button>
+                    <button id="logoutBtn" class="btn-google-logout" style="display:none;">로그아웃</button>
+                </li>
+            </ul>
+        </nav>
+    </header>
+
+    <!-- 모바일 하단 네비게이션 탭 -->
+    <div class="mobile-tabs">
+        <button class="m-tab active" onclick="switchMobileTab('sidebar')"><i class="fas fa-search"></i> 검색</button>
+        <button class="m-tab" onclick="switchMobileTab('planView')"><i class="fas fa-clipboard-list"></i> 일정</button>
+        <button class="m-tab" onclick="switchMobileTab('mapView')"><i class="fas fa-map-marked-alt"></i> 지도</button>
+    </div>
+
+    <main class="container">
+        <!-- 좌측: 장소 검색 및 목록 -->
+        <section class="sidebar m-active" id="mobileSidebar">
+            <h2>장소 검색</h2>
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="장소, 맛집, 숙소 검색...">
+                <button onclick="searchPlaces()">검색</button>
+            </div>
+            <div class="category-filters">
+                <button class="filter-btn active" data-category="all">전체</button>
+                <button class="filter-btn" data-category="restaurant">맛집</button>
+                <button class="filter-btn" data-category="attraction">관광</button>
+                <button class="filter-btn" data-category="accommodation">숙소</button>
+                <button class="filter-btn" data-category="wheelchair">휠체어</button>
+            </div>
+            
+            <div id="searchResults" class="place-list">
+                <!-- 검색 결과가 여기에 표시됨 -->
+                <div class="place-item skeleton">검색을 시작해보세요.</div>
+            </div>
+        </section>
+
+        <!-- 중앙: 일정 계획 (내 일정 뷰) -->
+        <section class="plan-board" id="planView">
+            <h2>루트 짜기 
+                <div style="display:flex; gap:0.5rem;">
+                    <button class="btn-google btn-google-secondary" id="btnUndo" style="display:none; padding: 0.4rem 0.8rem; border: 1px solid #dadce0; font-size: 0.85rem;"><i class="fas fa-undo"></i> 되돌리기</button>
+                    <button class="btn-google btn-google-primary" id="btnApplyMode" style="padding: 0.4rem 0.8rem; border: none; font-size: 0.85rem;">적용</button>
+                    <button class="btn-share" id="btnShareMode">등록</button>
+                </div>
+            </h2>
+            <div id="dayTabsContainer" style="display:flex; gap:10px; margin-bottom:15px; overflow-x:auto;">
+                <button class="day-tab active" data-day="1" onclick="selectDay(1)">1일차</button>
+                <button id="addDayBtn" style="background:none; border:1px dashed #ccc; border-radius:4px; padding:5px 10px; cursor:pointer;" onclick="addDay()">+ 일자 추가</button>
+            </div>
+            <div class="plan-timeline" id="planTimeline">
+                <!-- 일정 아이템들이 여기에 추가됨 -->
+                <div class="empty-state">
+                    <p>장소를 추가하여 일정을 만들어보세요.</p>
+                </div>
+            </div>
+            
+            <div style="margin: 10px 0;">
+                <textarea id="planDescription" placeholder="이 일정에 대한 간단한 설명을 적어보세요..." style="width: 100%; padding: 8px; border: 1px solid #dadce0; border-radius: 4px; resize: vertical; min-height: 60px;"></textarea>
+            </div>
+            
+            <div class="plan-summary">
+                <h3>일정 요약</h3>
+                <div class="summary-details">
+                    <p>총 이동 시간: <span id="totalMoveTime">0</span>분</p>
+                    <p>총 체류 시간: <span id="totalStayTime">0</span>분</p>
+                    <p class="total-time">예상 총 소요 시간: <span id="totalTime">0</span>분</p>
+                    <p>예상 비용: <span id="totalCost">0</span>원</p>
+                </div>
+                <button id="clearPlanBtn" class="btn-google btn-google-danger" style="width: 100%; margin-top: 15px; margin-left: 0; padding: 10px;">일정 전체 삭제</button>
+            </div>
+        </section>
+
+        <!-- 보기 모드 (적용된 루트 보기) -->
+        <section class="plan-board" id="viewBoard" style="display: none;">
+            <h2>내 일정 
+                <button class="btn-google btn-google-secondary" id="btnEditMode" style="padding: 0.4rem 0.8rem; border: 1px solid #dadce0; font-size: 0.85rem;">수정</button>
+            </h2>
+            <div id="viewDayTabsContainer" style="display:flex; gap:10px; margin-bottom:15px; overflow-x:auto;">
+                <!-- 뷰 모드 탭 렌더링 영역 -->
+            </div>
+            <div class="plan-timeline" id="viewTimeline">
+                <!-- 읽기 전용 아이템 -->
+            </div>
+            
+            <div style="margin: 10px 0;">
+                <p id="viewPlanDescription" style="font-size: 0.9rem; color: #5f6368; padding: 10px; background: #f8f9fa; border-radius: 4px; min-height: 20px;"></p>
+            </div>
+            
+            <div class="plan-summary">
+                <h3>일정 요약</h3>
+                <div class="summary-details">
+                    <p>총 이동 시간: <span id="viewTotalMoveTime">0</span>분</p>
+                    <p>총 체류 시간: <span id="viewTotalStayTime">0</span>분</p>
+                    <p class="total-time">예상 총 소요 시간: <span id="viewTotalTime">0</span>분</p>
+                    <p>예상 비용: <span id="viewTotalCost">0</span>원</p>
+                </div>
+            </div>
+
+            <div class="nearby-routes" style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #dadce0;">
+                <h3 style="font-size: 1rem; margin-bottom: 10px; color:#202124;">지도 주변 추천 루트</h3>
+                <div id="nearbyRoutesList" style="display:flex; flex-direction:column; gap:10px;">
+                    <!-- 추천 루트 렌더링 영역 -->
+                </div>
+            </div>
+        </section>
+
+        <!-- 우측: 지도 (내 일정 뷰) -->
+        <section class="map-container" id="mapView">
+            <button id="panelToggleBtn" style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); z-index: 1000; background: white; border: 1px solid #ccc; border-left: none; padding: 15px 5px; cursor: pointer; border-radius: 0 4px 4px 0; box-shadow: 2px 0 5px rgba(0,0,0,0.1);"><i class="fas fa-chevron-left"></i></button>
+            <div id="map" class="map">
+                <!-- 카카오맵 지도가 렌더링될 영역 -->
+            </div>
+        </section>
+
+        <!-- 커뮤니티 뷰 (기본 숨김) -->
+        <section class="community-board" id="communityView" style="display: none; flex: 1; padding: 2rem; background: var(--background-color); overflow-y: auto;">
+            <h2>커뮤니티</h2>
+            <div id="communityContainer">
+                <!-- 커뮤니티 글 목록 -->
+            </div>
+        </section>
+
+        <!-- 내가 작성한 루트 뷰 -->
+        <section class="community-board" id="myRoutesView" style="display: none; flex: 1; padding: 2rem; background: var(--background-color); overflow-y: auto;">
+            <h2>내가 작성한 루트</h2>
+            <div id="myRoutesContainer">
+                <!-- 내 글 목록 -->
+            </div>
+        </section>
+    </main>
+
+    <!-- 모달: 커뮤니티 일정 상세 보기 -->
+    <div id="communityPlanModal" class="modal">
+        <div class="modal-content" style="max-width: 600px; max-height: 80vh; overflow-y: auto;">
+            <span class="close-btn" onclick="document.getElementById('communityPlanModal').classList.remove('active')" style="cursor: pointer;">&times;</span>
+            <h2 id="cpModalTitle" style="margin-bottom: 10px; color: var(--primary-color);">일정 제목</h2>
+            <div style="font-size: 0.9rem; color: #666; margin-bottom: 15px;">
+                작성자: <span id="cpModalAuthor"></span> | <span id="cpModalRating"></span>
+            </div>
+            
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                <h4 style="margin-bottom: 8px;">일정 설명</h4>
+                <p id="cpModalDescription" style="font-size: 0.95rem; color: #333; line-height: 1.5;"></p>
+            </div>
+            
+            <h4 style="margin-bottom: 10px;">루트 정보</h4>
+            <div id="cpModalPlaces" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px;">
+                <!-- 장소들 나열 -->
+            </div>
+            
+            <h4 style="margin-bottom: 10px;">리뷰</h4>
+            <div id="cpModalReviews" style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; background: #fff; border: 1px solid #eee; padding: 10px; border-radius: 8px;">
+                <!-- 리뷰들 나열 -->
+            </div>
+            
+            <div id="cpModalActions" style="display: flex; gap: 10px; margin-top: 10px;">
+                <!-- 버튼들 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+    <!-- 모달: 로그인 / 회원가입 -->
+    <div id="loginModal" class="modal">
+        <div class="modal-content" style="max-width: 300px;">
+            <span class="close-btn" id="closeLoginBtn">&times;</span>
+            
+            <div style="display:flex; justify-content:space-around; margin-bottom:15px; border-bottom:1px solid #ccc;">
+                <button id="tabLogin" style="background:none; border:none; padding:10px; font-weight:bold; cursor:pointer; color:var(--primary-color); border-bottom:2px solid var(--primary-color);">로그인</button>
+                <button id="tabSignup" style="background:none; border:none; padding:10px; cursor:pointer; color:#666;">회원가입</button>
+            </div>
+
+            <!-- 로그인 폼 -->
+            <div id="loginForm">
+                <div class="form-group">
+                    <label>아이디</label>
+                    <input type="text" id="loginUsername" placeholder="아이디 입력 (예: testuser)">
+                </div>
+                <div class="form-group">
+                    <label>비밀번호</label>
+                    <input type="password" id="loginPassword" placeholder="비밀번호">
+                </div>
+                <button id="submitLoginBtn" class="btn-primary" style="width: 100%;">로그인</button>
+            </div>
+
+            <!-- 회원가입 폼 -->
+            <div id="signupForm" style="display:none;">
+                <div class="form-group">
+                    <label>새 아이디</label>
+                    <input type="text" id="signupUsername" placeholder="원하는 아이디 입력">
+                </div>
+                <div class="form-group">
+                    <label>새 비밀번호</label>
+                    <input type="password" id="signupPassword" placeholder="비밀번호 입력">
+                </div>
+                <button id="submitSignupBtn" class="btn-primary" style="width: 100%; background:#28a745;">가입하기</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 모달: 평가 작성 -->
+    <div id="reviewModal" class="modal">
+        <div class="modal-content" style="max-width: 400px;">
+            <span class="close-btn" id="closeReviewBtn">&times;</span>
+            <h3 id="reviewPlanTitle">일정 평가하기</h3>
+            <div class="form-group">
+                <label>평점</label>
+                <select id="reviewRating">
+                    <option value="5">5점</option>
+                    <option value="4">4점</option>
+                    <option value="3">3점</option>
+                    <option value="2">2점</option>
+                    <option value="1">1점</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>한줄평</label>
+                <textarea id="reviewText" placeholder="이 일정에 대한 평가를 남겨주세요." rows="3"></textarea>
+            </div>
+            <button id="submitReviewBtn" class="btn-primary" style="width: 100%;">평가 등록</button>
+        </div>
+    </div>
+
+    <!-- 모달: 장소 추가 옵션 (체류시간, 메모, 접근성 태그 등) -->
+    <div id="placeModal" class="modal">
+        <div class="modal-content">
+            <span class="close-btn" style="cursor: pointer;">&times;</span>
+            <h3 id="modalPlaceName">장소 이름</h3>
+            
+            <div class="form-group">
+                <label>체류 시간 (분)</label>
+                <input type="number" id="stayTime" value="60" min="0" step="10">
+            </div>
+            
+            <div class="form-group">
+                <label>태그</label>
+                <div class="tags-container">
+                    <label class="tag-checkbox"><input type="checkbox" value="wheelchair"> 휠체어 접근 가능</label>
+                    <label class="tag-checkbox"><input type="checkbox" value="elevator"> 엘리베이터 있음</label>
+                    <label class="tag-checkbox"><input type="checkbox" value="parking"> 장애인 주차장</label>
+                    <label class="tag-checkbox"><input type="checkbox" value="stroller"> 유모차 대여</label>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>이동 수단 (이전 장소에서)</label>
+                <select id="transportMode">
+                    <option value="walk">도보</option>
+                    <option value="bus">버스</option>
+                    <option value="subway">지하철</option>
+                    <option value="taxi">택시</option>
+                    <option value="wheelchair">휠체어</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>메모</label>
+                <textarea id="placeMemo" placeholder="주의사항이나 기억할 점을 적어주세요."></textarea>
+            </div>
+
+            <div class="form-group">
+                <label>사진 업로드</label>
+                <input type="file" id="placePhoto" accept="image/*">
+                <img id="placePhotoPreview" style="max-width: 100%; margin-top: 10px; display: none; border-radius: 8px;">
+            </div>
+            
+            <button id="addPlaceBtn" class="btn-primary">일정에 추가</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js').then(() => console.log("Service Worker Registered"));
+        }
+    </script>
+</body>
+</html>
