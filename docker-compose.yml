@@ -1,0 +1,21 @@
+# 로컬 개발용 Redis — RTR refresh 토큰/Grace Period/계정 잠금 카운터 저장소
+# 실행:  docker compose up -d
+# 중지:  docker compose down   (데이터까지 삭제하려면 -v)
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: travelplan-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:
