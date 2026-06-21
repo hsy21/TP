@@ -90,9 +90,20 @@ const addPlaceBtn = document.getElementById('addPlaceBtn');
         renderCommunity();
     });
 
+    document.getElementById('nav-talk').addEventListener('click', (e) => {
+        e.preventDefault();
+        switchView('talk');
+    });
+
+    document.getElementById('nav-profile').addEventListener('click', (e) => {
+        e.preventDefault();
+        switchView('profile');
+    });
+
     const navMyRoutes = document.getElementById('nav-my-routes');
     if (navMyRoutes) {
-        navMyRoutes.addEventListener('click', () => {
+        navMyRoutes.addEventListener('click', (e) => {
+            e.preventDefault();
             window.location.href = 'my_routes.html';
         });
     }
@@ -436,7 +447,39 @@ function switchView(view) {
     const commView = document.getElementById('communityView');
     const myRoutesView = document.getElementById('myRoutesView');
     const navMyRoutes = document.getElementById('nav-my-routes');
+    const navTalk = document.getElementById('nav-talk');
+    const navProfile = document.getElementById('nav-profile');
+    const talkView = document.getElementById('talkView');
+    const profileView = document.getElementById('profileView');
     const sidebar = document.querySelector('.sidebar');
+
+    // 모든 상단 네비 활성 해제 + 단독 뷰 기본 숨김(각 분기에서 필요 시 표시)
+    [navPlan, navComm, navTalk, navProfile, navMyRoutes].forEach(n => n && n.classList.remove('active'));
+    if (talkView) talkView.style.display = 'none';
+    if (profileView) profileView.style.display = 'none';
+
+    // 여행 톡 / 내 정보: 전체 폭 단독 뷰
+    if (view === 'talk' || view === 'profile') {
+        planView.style.display = 'none';
+        if (viewBoard) viewBoard.style.display = 'none';
+        mapView.style.display = 'none';
+        sidebar.style.display = 'none';
+        commView.style.display = 'none';
+        if (myRoutesView) myRoutesView.style.display = 'none';
+        const mobileTabs0 = document.querySelector('.mobile-tabs');
+        if (mobileTabs0) mobileTabs0.style.display = 'none';
+        if (view === 'talk') {
+            if (navTalk) navTalk.classList.add('active');
+            if (talkView) talkView.style.display = 'block';
+            backToTalkList();
+            renderTalk();
+        } else {
+            if (navProfile) navProfile.classList.add('active');
+            if (profileView) profileView.style.display = 'block';
+            renderProfile();
+        }
+        return;
+    }
 
     if (view === 'plan-edit') {
         navPlan.classList.add('active');
@@ -525,8 +568,8 @@ function switchView(view) {
         navComm.classList.add('active');
         commView.style.display = 'block';
         
-        // 커뮤니티 뷰에 들어올 때 qna도 함께 렌더링
-        renderQna();
+        // 여행 홈: 카테고리 탭 기반 탐색(추천/인기/검색) 렌더링
+        enterHome();
 
         sidebar.classList.remove('m-active');
         mapView.classList.remove('m-active');
@@ -2994,134 +3037,487 @@ async function submitAccessReview() {
 }
 
 // ============================================================
-// REQ-COM-06: 현지 정보 질의응답 + 실시간 제보 게시판
+// 여행 톡 (커뮤니티 게시판): 지역 카드 + 글 피드 + 상세/댓글 + 작성 + 반응
 // ============================================================
-let qnaFilterCategory = '';
-let currentQnaPostId = null;
+let talkPosts = [];
+let talkRegionFilterVal = '';
+let currentTalkPostId = null;
+let talkWritePhotos = [];
+let talkCommentPhoto = '';
 
-function setQnaFilter(btn, cat) {
-    qnaFilterCategory = cat;
-    document.querySelectorAll('.qna-filter-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    renderQna();
+function tEsc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function talkFileToDataURL(file) {
+    return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = reject;
+        r.readAsDataURL(file);
+    });
+}
+function talkDateShort(s) {
+    const d = new Date((s || '').replace(' ', 'T') + 'Z');
+    if (isNaN(d)) return '';
+    const yy = String(d.getFullYear()).slice(2), mm = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
+    return `${yy}.${mm}.${dd}`;
+}
+function talkTimeAgo(s) {
+    const d = new Date((s || '').replace(' ', 'T') + 'Z');
+    if (isNaN(d)) return '';
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return '방금';
+    if (diff < 3600) return Math.floor(diff / 60) + '분 전';
+    if (diff < 86400) return Math.floor(diff / 3600) + '시간 전';
+    if (diff < 172800) return '어제';
+    if (diff < 259200) return '그저께';
+    if (diff < 604800) return Math.floor(diff / 86400) + '일 전';
+    return talkDateShort(s);
 }
 
-async function renderQna() {
-    const container = document.getElementById('qnaListContainer');
-    if (!container) return;
-    container.innerHTML = '<div style="color:#888;">불러오는 중...</div>';
+// 톡 진입: 지역 카드 + 필터 + 피드 모두 렌더
+async function renderTalk() {
+    try {
+        const rres = await fetch('/api/talk/regions');
+        const regions = await rres.json();
+        renderTalkRegionCards(regions);
+        populateTalkRegionFilter(regions);
+    } catch (e) { console.error('여행 톡 지역 카드 오류:', e); }
+    await renderTalkFeedOnly();
+}
+
+// 피드만 갱신(반응 토글/필터 변경 시)
+async function renderTalkFeedOnly() {
+    const feed = document.getElementById('talkFeed');
+    if (!feed) return;
+    feed.innerHTML = '<div style="color:#888; padding:20px; text-align:center;">불러오는 중...</div>';
     try {
         const params = new URLSearchParams();
-        if (qnaFilterCategory) params.set('category', qnaFilterCategory);
-        const res = await fetch('/api/qna' + (params.toString() ? '?' + params.toString() : ''));
-        const posts = await res.json();
-        if (!posts || posts.length === 0) {
-            container.innerHTML = '<div style="color:#888; padding:20px; text-align:center;">아직 등록된 글이 없습니다. 첫 글을 남겨보세요!</div>';
+        if (currentUser) params.set('user_id', currentUser.id);
+        if (talkRegionFilterVal) params.set('region', talkRegionFilterVal);
+        const res = await fetch('/api/talk' + (params.toString() ? '?' + params.toString() : ''));
+        talkPosts = await res.json();
+        if (!talkPosts || talkPosts.length === 0) {
+            feed.innerHTML = '<div style="color:#888; padding:40px; text-align:center;">아직 등록된 글이 없어요. 첫 글을 남겨보세요!</div>';
             return;
         }
-        container.innerHTML = posts.map(p => {
-            const isReport = p.category === 'report';
-            const badge = isReport
-                ? '<span style="background:#fce8e6; color:#d93025; padding:3px 10px; border-radius:12px; font-size:0.75rem; font-weight:700;">📢 제보</span>'
-                : '<span style="background:#e8f0fe; color:#1a73e8; padding:3px 10px; border-radius:12px; font-size:0.75rem; font-weight:700;">❓ 질문</span>';
-            const region = p.region ? `<span style="color:#5f6368; font-size:0.82rem;"><i class="fas fa-map-marker-alt"></i> ${p.region}</span>` : '';
-            const title = (p.title || p.question || '').replace(/</g, '&lt;');
-            return `<div onclick="openQnaDetail(${p.id})" style="cursor:pointer; background:#fff; border:1px solid #e0e0e0; border-radius:12px; padding:14px 16px; box-shadow:0 1px 4px rgba(0,0,0,0.05);" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='0 1px 4px rgba(0,0,0,0.05)'">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:8px;">
-                    <div style="display:flex; gap:8px; align-items:center;">${badge}${region}</div>
-                    <span style="color:#1a73e8; font-size:0.82rem; font-weight:600;"><i class="fas fa-comment-dots"></i> ${p.answer_count}</span>
-                </div>
-                <div style="font-weight:600; color:#202124; margin-bottom:4px;">${title}</div>
-                <div style="color:#5f6368; font-size:0.85rem;">작성자 ${p.username || '익명'}</div>
-            </div>`;
-        }).join('');
+        feed.innerHTML = talkPosts.map(talkFeedCardHTML).join('');
     } catch (e) {
-        console.error('Q&A 로드 오류:', e);
-        container.innerHTML = '<div style="color:#d93025;">게시글을 불러오지 못했습니다.</div>';
+        console.error('여행 톡 로드 오류:', e);
+        feed.innerHTML = '<div style="color:#d93025;">글을 불러오지 못했습니다.</div>';
     }
 }
 
-async function submitQnaPost() {
-    if (!currentUser) return alert('로그인이 필요한 기능입니다.');
-    const category = document.getElementById('qnaCategory').value;
-    const region = document.getElementById('qnaRegion').value.trim();
-    const title = document.getElementById('qnaTitle').value.trim();
-    const question = document.getElementById('qnaQuestion').value.trim();
-    if (!question) return alert('내용을 입력해주세요.');
-    try {
-        const res = await fetch('/api/qna', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: currentUser.id, region, title, question, category })
-        });
-        if (res.ok) {
-            document.getElementById('qnaRegion').value = '';
-            document.getElementById('qnaTitle').value = '';
-            document.getElementById('qnaQuestion').value = '';
-            renderQna();
-        } else {
-            alert('등록에 실패했습니다.');
-        }
-    } catch (e) {
-        console.error('Q&A 등록 오류:', e);
-    }
+function talkFeedCardHTML(p) {
+    const region = p.region
+        ? `<span style="display:inline-block; border:1px solid #202124; border-radius:16px; padding:3px 14px; font-size:0.82rem; font-weight:600; margin:6px 0 10px;">${tEsc(p.region)}</span><br>`
+        : '';
+    const likeOn = p.my_like ? 'color:#1a73e8;' : 'color:#5f6368;';
+    const heartOn = p.my_heart ? 'color:#e0245e;' : 'color:#5f6368;';
+    return `
+    <div onclick="openTalkDetail(${p.id})" style="cursor:pointer; border-bottom:1px solid #e8eaed; padding:20px 4px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+            <i class="fas fa-user-circle" style="font-size:2.2rem; color:#bdc1c6;"></i>
+            <div>
+                <div style="font-weight:700; color:#202124;">${tEsc(p.username || '익명')}</div>
+                <div style="font-size:0.75rem; color:#9aa0a6;">${talkDateShort(p.created_at)}</div>
+            </div>
+        </div>
+        <div style="font-weight:700; font-size:1.05rem; color:#202124; margin-bottom:6px;">${tEsc(p.title || '(제목 없음)')}</div>
+        <div style="color:#5f6368; font-size:0.9rem; line-height:1.5; margin-bottom:8px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">${tEsc(p.content || '')}</div>
+        ${region}
+        <div style="display:flex; align-items:center; gap:18px; margin-top:4px;">
+            <span onclick="event.stopPropagation(); toggleTalkReaction(${p.id},'like')" style="cursor:pointer; ${likeOn} font-weight:600;"><i class="fas fa-thumbs-up"></i> ${p.like_count}</span>
+            <span onclick="event.stopPropagation(); toggleTalkReaction(${p.id},'heart')" style="cursor:pointer; ${heartOn} font-weight:600;"><i class="fas fa-heart"></i> ${p.heart_count}</span>
+            <span style="color:#5f6368; font-weight:600;"><i class="fas fa-comment-dots"></i> ${p.comment_count}</span>
+            <span style="margin-left:auto; font-size:0.8rem; color:#9aa0a6;">${talkTimeAgo(p.created_at)}</span>
+        </div>
+    </div>`;
 }
 
-async function openQnaDetail(postId) {
-    currentQnaPostId = postId;
+function renderTalkRegionCards(regions) {
+    const wrap = document.getElementById('talkRegionCards');
+    if (!wrap) return;
+    if (!regions || regions.length === 0) { wrap.innerHTML = ''; return; }
+    wrap.innerHTML = regions.map(r => `
+        <div onclick="filterTalkByRegion('${encodeURIComponent(r.region)}')" style="cursor:pointer; flex:0 0 auto; width:230px; border:1px solid #dadce0; border-radius:16px; padding:16px 18px; background:#fff;">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                <i class="fas fa-comment-dots" style="color:#9aa0a6; font-size:1.4rem;"></i>
+                <span style="font-weight:700; color:#202124;">${tEsc(r.region)}</span>
+            </div>
+            <div style="color:#5f6368; font-size:0.85rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${tEsc(r.latest || '')}</div>
+        </div>`).join('');
+}
+
+function populateTalkRegionFilter(regions) {
+    const sel = document.getElementById('talkRegionFilter');
+    if (!sel) return;
+    const cur = talkRegionFilterVal;
+    sel.innerHTML = '<option value="">도시 전체 ▾</option>' +
+        (regions || []).map(r => `<option value="${tEsc(r.region)}">${tEsc(r.region)} (${r.cnt})</option>`).join('');
+    sel.value = cur || '';
+}
+
+function onTalkRegionFilter() {
+    const sel = document.getElementById('talkRegionFilter');
+    talkRegionFilterVal = sel ? sel.value : '';
+    renderTalkFeedOnly();
+}
+
+function filterTalkByRegion(encRegion) {
+    talkRegionFilterVal = decodeURIComponent(encRegion);
+    const sel = document.getElementById('talkRegionFilter');
+    if (sel) sel.value = talkRegionFilterVal;
+    renderTalkFeedOnly();
+}
+
+async function openTalkDetail(id) {
+    currentTalkPostId = id;
+    document.getElementById('talkListMode').style.display = 'none';
+    document.getElementById('talkWriteMode').style.display = 'none';
+    document.getElementById('talkDetailMode').style.display = 'block';
+    const content = document.getElementById('talkDetailContent');
+    content.innerHTML = '<div style="color:#888;">불러오는 중...</div>';
     try {
-        const res = await fetch(`/api/qna/${postId}`);
+        const params = new URLSearchParams();
+        if (currentUser) params.set('user_id', currentUser.id);
+        const res = await fetch(`/api/talk/${id}` + (params.toString() ? '?' + params.toString() : ''));
         const data = await res.json();
-        const post = data.post;
-        const isReport = post.category === 'report';
-        document.getElementById('qnaDetailBadge').innerHTML = isReport
-            ? '<span style="background:#fce8e6; color:#d93025; padding:3px 10px; border-radius:12px; font-size:0.78rem; font-weight:700;">📢 실시간 제보</span>'
-            : '<span style="background:#e8f0fe; color:#1a73e8; padding:3px 10px; border-radius:12px; font-size:0.78rem; font-weight:700;">❓ 질문</span>';
-        document.getElementById('qnaDetailHeading').textContent = post.title || post.question;
-        document.getElementById('qnaDetailMeta').innerHTML = `작성자 <strong>${post.username || '익명'}</strong>${post.region ? ' · <i class="fas fa-map-marker-alt"></i> ' + post.region : ''}`;
-        document.getElementById('qnaDetailBody').textContent = post.question;
-
-        const answers = data.answers || [];
-        document.getElementById('qnaAnswerCount').textContent = `(${answers.length})`;
-        const listDiv = document.getElementById('qnaAnswerList');
-        if (answers.length === 0) {
-            listDiv.innerHTML = '<div style="color:#888; font-size:0.9rem;">아직 답변/제보가 없습니다.</div>';
-        } else {
-            listDiv.innerHTML = answers.map(a => `
-                <div style="border-left:3px solid #1a73e8; background:#f8f9fa; padding:10px 12px; border-radius:0 8px 8px 0;">
-                    <div style="font-size:0.82rem; color:#5f6368; margin-bottom:4px;"><strong>${a.username || '익명'}</strong></div>
-                    <div style="color:#333;">${(a.answer || '').replace(/</g, '&lt;')}</div>
-                </div>`).join('');
-        }
-        document.getElementById('qnaAnswerInput').value = '';
-        document.getElementById('qnaDetailModal').classList.add('active');
+        renderTalkDetail(data);
     } catch (e) {
-        console.error('Q&A 상세 오류:', e);
+        console.error('여행 톡 상세 오류:', e);
+        content.innerHTML = '<div style="color:#d93025;">불러오지 못했습니다.</div>';
     }
 }
 
-async function submitQnaAnswer() {
+function renderTalkDetail(data) {
+    const p = data.post;
+    const comments = data.comments || [];
+    const content = document.getElementById('talkDetailContent');
+    const likeOn = p.my_like ? 'color:#1a73e8;' : 'color:#5f6368;';
+    const heartOn = p.my_heart ? 'color:#e0245e;' : 'color:#5f6368;';
+    const region = (p.region || p.place)
+        ? `<span style="display:inline-block; border:1px solid #202124; border-radius:16px; padding:3px 14px; font-size:0.82rem; font-weight:600; margin:8px 0;">${tEsc(p.region || '')}${p.place ? ' · ' + tEsc(p.place) : ''}</span>`
+        : '';
+    const photos = (p.photos || []).map(src => `<img src="${src}" style="width:100%; border-radius:10px; margin-bottom:10px;">`).join('');
+    const canDelete = currentUser && (currentUser.role === 'admin' || currentUser.id === p.user_id);
+    content.innerHTML = `
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+            <i class="fas fa-user-circle" style="font-size:2.4rem; color:#bdc1c6;"></i>
+            <div>
+                <div style="font-weight:700;">${tEsc(p.username || '익명')}</div>
+                <div style="font-size:0.78rem; color:#9aa0a6;">${talkDateShort(p.created_at)}</div>
+            </div>
+            ${canDelete ? `<button onclick="deleteTalkPost(${p.id})" style="margin-left:auto; padding:5px 12px; border:1px solid #f0b3ac; background:#fff; color:#d93025; border-radius:16px; font-size:0.8rem; cursor:pointer;">삭제</button>` : ''}
+        </div>
+        <h2 style="color:#202124; margin-bottom:4px;">${tEsc(p.title || '')}</h2>
+        ${region}
+        <div style="color:#333; line-height:1.7; white-space:pre-wrap; margin:14px 0;">${tEsc(p.content || '')}</div>
+        ${photos ? `<div style="margin:16px 0;"><div style="font-weight:600; color:#5f6368; margin-bottom:8px;">업로드한 사진들</div>${photos}</div>` : ''}
+        <div style="display:flex; gap:22px; align-items:center; border-top:1px solid #e8eaed; padding-top:14px;">
+            <span onclick="toggleTalkReaction(${p.id},'like')" style="cursor:pointer; ${likeOn} font-weight:700;"><i class="fas fa-thumbs-up"></i> ${p.like_count}</span>
+            <span onclick="toggleTalkReaction(${p.id},'heart')" style="cursor:pointer; ${heartOn} font-weight:700;"><i class="fas fa-heart"></i> ${p.heart_count}</span>
+        </div>`;
+
+    const clist = document.getElementById('talkCommentList');
+    document.getElementById('talkCommentCount').textContent = `(${comments.length})`;
+    if (comments.length === 0) {
+        clist.innerHTML = '<div style="color:#9aa0a6; text-align:center; padding:16px;">아직 댓글이 없어요.<br>댓글을 남겨주세요!</div>';
+    } else {
+        clist.innerHTML = comments.map(c => `
+            <div style="display:flex; gap:10px;">
+                <i class="fas fa-user-circle" style="font-size:1.8rem; color:#bdc1c6;"></i>
+                <div style="flex:1;">
+                    <div style="font-size:0.85rem;"><strong>${tEsc(c.username || '익명')}</strong> <span style="color:#9aa0a6; font-size:0.75rem;">${talkTimeAgo(c.created_at)}</span></div>
+                    <div style="color:#333; margin-top:2px;">${tEsc(c.content || '')}</div>
+                    ${c.photo ? `<img src="${c.photo}" style="max-width:200px; border-radius:8px; margin-top:6px;">` : ''}
+                </div>
+            </div>`).join('');
+    }
+}
+
+function backToTalkList() {
+    const dm = document.getElementById('talkDetailMode'); if (dm) dm.style.display = 'none';
+    const wm = document.getElementById('talkWriteMode'); if (wm) wm.style.display = 'none';
+    const lm = document.getElementById('talkListMode'); if (lm) lm.style.display = 'block';
+}
+
+function openTalkWrite() {
     if (!currentUser) return alert('로그인이 필요한 기능입니다.');
-    if (!currentQnaPostId) return;
-    const answer = document.getElementById('qnaAnswerInput').value.trim();
-    if (!answer) return alert('답변 내용을 입력해주세요.');
+    talkWritePhotos = [];
+    ['talkWriteRegion', 'talkWritePlace', 'talkWriteTitle', 'talkWriteContent'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.value = '';
+    });
+    document.getElementById('talkWritePhotoPreview').innerHTML = '';
+    document.getElementById('talkListMode').style.display = 'none';
+    document.getElementById('talkDetailMode').style.display = 'none';
+    document.getElementById('talkWriteMode').style.display = 'block';
+}
+
+async function onTalkWritePhoto(input) {
+    const files = Array.from(input.files || []);
+    for (const f of files) {
+        if (talkWritePhotos.length >= 8) { alert('사진은 최대 8장까지 첨부할 수 있어요.'); break; }
+        try { talkWritePhotos.push(await talkFileToDataURL(f)); } catch (_) {}
+    }
+    input.value = '';
+    renderTalkWritePreviews();
+}
+function renderTalkWritePreviews() {
+    const wrap = document.getElementById('talkWritePhotoPreview');
+    if (!wrap) return;
+    wrap.innerHTML = talkWritePhotos.map((src, i) => `
+        <div style="position:relative;">
+            <img src="${src}" style="width:96px; height:96px; object-fit:cover; border-radius:8px;">
+            <button onclick="removeTalkWritePhoto(${i})" style="position:absolute; top:-6px; right:-6px; width:22px; height:22px; border-radius:50%; border:none; background:#202124; color:#fff; cursor:pointer; font-size:0.8rem; line-height:1;">×</button>
+        </div>`).join('');
+}
+function removeTalkWritePhoto(i) { talkWritePhotos.splice(i, 1); renderTalkWritePreviews(); }
+
+async function submitTalkPost() {
+    if (!currentUser) return alert('로그인이 필요한 기능입니다.');
+    const region = document.getElementById('talkWriteRegion').value.trim();
+    const place = document.getElementById('talkWritePlace').value.trim();
+    const title = document.getElementById('talkWriteTitle').value.trim();
+    const contentV = document.getElementById('talkWriteContent').value.trim();
+    if (!title && !contentV) return alert('제목 또는 내용을 입력해주세요.');
     try {
-        const res = await fetch(`/api/qna/${currentQnaPostId}/answer`, {
+        const res = await fetch('/api/talk', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: currentUser.id, answer })
+            body: JSON.stringify({ user_id: currentUser.id, region, place, title, content: contentV, photos: talkWritePhotos })
         });
         if (res.ok) {
-            await openQnaDetail(currentQnaPostId); // 새로고침
-            renderQna();
+            talkWritePhotos = [];
+            backToTalkList();
+            renderTalk();
         } else {
-            alert('답변 등록에 실패했습니다.');
+            const e = await res.json().catch(() => ({}));
+            alert(e.error || '등록에 실패했습니다.');
         }
-    } catch (e) {
-        console.error('답변 등록 오류:', e);
+    } catch (e) { console.error('여행 톡 등록 오류:', e); alert('등록 실패'); }
+}
+
+function onTalkCommentPhoto(input) {
+    const f = (input.files || [])[0];
+    if (!f) return;
+    talkFileToDataURL(f).then(d => {
+        talkCommentPhoto = d;
+        document.getElementById('talkCommentPhotoPreview').innerHTML =
+            `<img src="${talkCommentPhoto}" style="max-width:120px; border-radius:8px; vertical-align:middle;"> <button onclick="clearTalkCommentPhoto()" style="border:none; background:none; color:#d93025; cursor:pointer;">사진 제거</button>`;
+        input.value = '';
+    }).catch(() => {});
+}
+function clearTalkCommentPhoto() {
+    talkCommentPhoto = '';
+    const el = document.getElementById('talkCommentPhotoPreview');
+    if (el) el.innerHTML = '';
+}
+
+async function submitTalkComment() {
+    if (!currentUser) return alert('로그인이 필요한 기능입니다.');
+    if (!currentTalkPostId) return;
+    const input = document.getElementById('talkCommentInput');
+    const contentV = input.value.trim();
+    if (!contentV && !talkCommentPhoto) return alert('댓글 내용을 입력해주세요.');
+    try {
+        const res = await fetch(`/api/talk/${currentTalkPostId}/comment`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: currentUser.id, content: contentV || '(사진)', photo: talkCommentPhoto })
+        });
+        if (res.ok) {
+            input.value = '';
+            clearTalkCommentPhoto();
+            openTalkDetail(currentTalkPostId);
+        } else {
+            alert('댓글 등록에 실패했습니다.');
+        }
+    } catch (e) { console.error('댓글 등록 오류:', e); }
+}
+
+async function toggleTalkReaction(id, type) {
+    if (!currentUser) return alert('로그인이 필요한 기능입니다.');
+    try {
+        const res = await fetch(`/api/talk/${id}/reaction`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: currentUser.id, type })
+        });
+        if (!res.ok) return;
+        const detail = document.getElementById('talkDetailMode');
+        const detailVisible = detail && detail.style.display !== 'none';
+        if (detailVisible && currentTalkPostId === id) openTalkDetail(id);
+        else renderTalkFeedOnly();
+    } catch (e) { console.error('반응 처리 오류:', e); }
+}
+
+async function deleteTalkPost(id) {
+    if (!currentUser) return;
+    if (!confirm('이 글을 삭제할까요?')) return;
+    try {
+        const res = await fetch(`/api/talk/${id}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: currentUser.id, user_role: currentUser.role })
+        });
+        if (res.ok) { backToTalkList(); renderTalk(); }
+        else { const e = await res.json().catch(() => ({})); alert(e.error || '삭제에 실패했습니다.'); }
+    } catch (e) { console.error('삭제 오류:', e); }
+}
+
+// ============================================================
+// 여행 홈: 카테고리 탭(숙소/관광/맛집/루트) + AI 추천/인기 장소 카드 + 검색
+// ============================================================
+let homeCat = 'attraction';
+let homeAiPlaces = [];
+let homePopularPlaces = [];
+let homeSearchPlaces = [];
+
+const HOME_CAT_LABEL = { attraction: '관광', accommodation: '숙소', restaurant: '맛집' };
+const HOME_CAT_KIND = { attraction: '관광명소', accommodation: '숙소', restaurant: '맛집' };
+
+// 여행 홈 진입(또는 탭 전환) 시 화면 구성
+function enterHome() {
+    if (!homeCat) homeCat = 'attraction';
+    document.querySelectorAll('.home-cat').forEach(b => b.classList.toggle('active', b.dataset.cat === homeCat));
+    const discover = document.getElementById('homeDiscover');
+    const routes = document.getElementById('homeRoutes');
+    if (homeCat === 'route') {
+        if (discover) discover.style.display = 'none';
+        if (routes) routes.style.display = 'block';
+        renderCommunity();
+    } else {
+        if (routes) routes.style.display = 'none';
+        if (discover) discover.style.display = 'block';
+        renderHomeDiscover(homeCat);
     }
 }
 
+function setHomeCat(btn, cat) {
+    homeCat = cat;
+    document.querySelectorAll('.home-cat').forEach(b => b.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    clearHomeSearch();
+    enterHome();
+}
+
+async function renderHomeDiscover(cat) {
+    const lab = document.getElementById('homePopularCatLabel');
+    if (lab) lab.textContent = HOME_CAT_LABEL[cat] || '관광';
+    const ai = document.getElementById('homeAiCards');
+    const pop = document.getElementById('homePopularCards');
+    if (!ai || !pop) return;
+    ai.innerHTML = '<div style="color:#888; padding:10px;">불러오는 중...</div>';
+    pop.innerHTML = '';
+    try {
+        if (!allPlaces || allPlaces.length === 0) await fetchPlaces();
+        let list = (allPlaces || []).filter(p => (p.category || '') === cat);
+        if (list.length === 0) list = (allPlaces || []).slice();
+        // 접근성 태그가 풍부한 순으로 정렬 → 추천/인기에 활용
+        const ranked = list
+            .map(p => ({ p, s: (p.tags || []).length }))
+            .sort((a, b) => b.s - a.s)
+            .map(x => x.p);
+        homeAiPlaces = ranked.slice(0, 8);
+        homePopularPlaces = ranked.slice(0, 12);
+        ai.innerHTML = homeAiPlaces.length
+            ? homeAiPlaces.map((p, i) => homeCardHTML(p, 'ai', i, true)).join('')
+            : '<div style="color:#888; padding:10px;">추천할 장소가 아직 없어요.</div>';
+        pop.innerHTML = homePopularPlaces.length
+            ? homePopularPlaces.map((p, i) => homeCardHTML(p, 'pop', i, false)).join('')
+            : '<div style="color:#888; padding:10px;">표시할 장소가 없어요.</div>';
+    } catch (e) {
+        console.error('여행 홈 추천 로드 오류:', e);
+        ai.innerHTML = '<div style="color:#d93025;">불러오지 못했습니다.</div>';
+    }
+}
+
+function homeCardHTML(p, listName, idx, isAi) {
+    const tags = p.tags || [];
+    const kind = HOME_CAT_KIND[p.category] || '장소';
+    const aiChip = isAi
+        ? '<span style="display:inline-block; background:#d2e3fc; color:#1a56c4; padding:2px 10px; border-radius:10px; font-size:0.72rem; font-weight:700; margin:6px 0;">#많이 찾는 장소</span>'
+        : '';
+    const tagBadges = tags.slice(0, 3).map(t => `<span style="font-size:0.7rem; color:#5f6368;">#${tEsc(t)}</span>`).join(' ');
+    return `
+    <div class="home-card">
+        <div class="home-card-img"><i class="far fa-image"></i></div>
+        <div style="font-weight:700; color:#202124; margin-top:8px;">${tEsc(p.name)}</div>
+        <div style="font-size:0.78rem; color:#5f6368; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${kind} · ${tEsc(p.address || '')}</div>
+        <div style="margin:4px 0; min-height:14px;">${tagBadges}</div>
+        ${aiChip}
+        <button onclick="homeAddToPlan('${listName}',${idx})" style="width:100%; margin-top:6px; padding:8px; border:1px solid #202124; background:#fff; border-radius:18px; cursor:pointer; font-weight:700; font-size:0.85rem;">내 일정에 담기</button>
+    </div>`;
+}
+
+function homeAddToPlan(listName, idx) {
+    const arr = listName === 'ai' ? homeAiPlaces : listName === 'pop' ? homePopularPlaces : homeSearchPlaces;
+    const p = arr && arr[idx];
+    if (!p) return;
+    if (typeof openPlaceModal === 'function') openPlaceModal(p);
+}
+
+async function homeSearch() {
+    const inp = document.getElementById('homeSearchInput');
+    const q = (inp ? inp.value : '').trim();
+    if (!q) return;
+    const wrap = document.getElementById('homeSearchResultsWrap');
+    const box = document.getElementById('homeSearchResults');
+    if (wrap) wrap.style.display = 'block';
+    if (box) box.innerHTML = '<div style="color:#888; padding:10px;">검색 중...</div>';
+    try {
+        const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+        const data = await res.json();
+        homeSearchPlaces = (Array.isArray(data) ? data : []).slice(0, 20).map(d => ({
+            id: d.place_id,
+            name: d.name || d.display_name,
+            address: d.display_name || '',
+            category: 'searched',
+            tags: [],
+            lat: parseFloat(d.lat),
+            lng: parseFloat(d.lon)
+        }));
+        if (!homeSearchPlaces.length) {
+            if (box) box.innerHTML = '<div style="color:#888; padding:10px;">검색 결과가 없습니다.</div>';
+            return;
+        }
+        if (box) box.innerHTML = homeSearchPlaces.map((p, i) => homeCardHTML(p, 'search', i, false)).join('');
+    } catch (e) {
+        console.error('여행 홈 검색 오류:', e);
+        if (box) box.innerHTML = '<div style="color:#d93025;">검색에 실패했습니다.</div>';
+    }
+}
+
+function clearHomeSearch() {
+    const wrap = document.getElementById('homeSearchResultsWrap');
+    if (wrap) wrap.style.display = 'none';
+    const box = document.getElementById('homeSearchResults');
+    if (box) box.innerHTML = '';
+    const inp = document.getElementById('homeSearchInput');
+    if (inp) inp.value = '';
+    homeSearchPlaces = [];
+}
+
+// 내 정보(자리표시)
+function renderProfile() {
+    const c = document.getElementById('profileContainer');
+    if (!c) return;
+    if (!currentUser) {
+        c.innerHTML = '<p>로그인하면 내 정보를 볼 수 있어요.</p>';
+        return;
+    }
+    c.innerHTML = `
+        <div style="display:flex; align-items:center; gap:14px; margin-bottom:18px;">
+            <i class="fas fa-user-circle" style="font-size:3.4rem; color:#bdc1c6;"></i>
+            <div>
+                <div style="font-size:1.2rem; font-weight:700; color:#202124;">${tEsc(currentUser.username)}</div>
+                <div style="color:#5f6368; font-size:0.9rem;">${currentUser.role === 'admin' ? '관리자' : '일반 회원'}</div>
+            </div>
+        </div>
+        <button onclick="window.location.href='my_routes.html'" style="padding:10px 18px; border:1px solid #dadce0; background:#fff; border-radius:8px; cursor:pointer; font-weight:600;">내 여행기(작성한 루트) 보기</button>
+        <p style="margin-top:20px; color:#9aa0a6; font-size:0.85rem;">※ 내 정보 화면은 추후 확장 예정입니다.</p>`;
+}
 
 function selectDay(day) {
     currentDay = day;

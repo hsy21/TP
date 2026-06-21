@@ -19,9 +19,11 @@
         </div>
         <nav style="flex: 1; display: flex; justify-content: flex-end;">
             <ul style="align-items: center;">
-                <li><a href="#" class="active" id="nav-community">커뮤니티 피드</a></li>
-                <li><a href="#" id="nav-plan">일정 짜기</a></li>
-                <li id="nav-my-routes-li" style="display:none;"><a href="my_routes.html" id="nav-my-routes">내가 작성한 루트</a></li>
+                <li><a href="#" class="active" id="nav-community">여행 홈</a></li>
+                <li><a href="#" id="nav-talk">여행 톡</a></li>
+                <li><a href="#" id="nav-plan">내 일정</a></li>
+                <li><a href="#" id="nav-my-routes">내 여행기</a></li>
+                <li><a href="#" id="nav-profile">내 정보</a></li>
                 <li class="user-profile-li" style="margin-left: 1rem;">
                     <span id="userInfo" style="display:none; margin-right:10px; font-size:0.9rem;"></span>
                     <button id="loginBtn" class="btn-google-login">로그인</button>
@@ -141,9 +143,45 @@
 
         <!-- 커뮤니티 뷰 (기본 숨김) -->
         <section class="community-board" id="communityView" style="flex: 1; padding: 2rem; background: var(--background-color); overflow-y: auto;">
+            <!-- 상단: 카테고리 탭 + 검색 (여행 홈) -->
+            <div style="display:flex; align-items:center; gap:24px; flex-wrap:wrap; border-bottom:2px solid #202124; padding-bottom:10px; margin-bottom:22px;">
+                <div style="display:flex; gap:22px;">
+                    <button class="home-cat" data-cat="accommodation" onclick="setHomeCat(this,'accommodation')">숙소</button>
+                    <button class="home-cat active" data-cat="attraction" onclick="setHomeCat(this,'attraction')">관광</button>
+                    <button class="home-cat" data-cat="restaurant" onclick="setHomeCat(this,'restaurant')">맛집</button>
+                    <button class="home-cat" data-cat="route" onclick="setHomeCat(this,'route')">루트</button>
+                </div>
+                <div style="flex:1; min-width:220px; display:flex; align-items:center; border:1px solid #202124; border-radius:6px; padding:2px 10px;">
+                    <input type="text" id="homeSearchInput" placeholder="장소, 맛집, 숙소 검색..." style="flex:1; border:none; outline:none; padding:8px 4px; font-size:0.95rem; background:transparent;" onkeydown="if(event.key==='Enter') homeSearch()">
+                    <button onclick="homeSearch()" style="border:none; background:none; cursor:pointer; font-size:1.1rem; color:#202124;"><i class="fas fa-search"></i></button>
+                </div>
+            </div>
+            <style>
+                .home-cat { background:none; border:none; font-size:1.1rem; font-weight:700; color:#9aa0a6; cursor:pointer; padding:6px 2px; }
+                .home-cat.active { color:#202124; border-bottom:3px solid #1a73e8; }
+                .home-card-row { display:flex; gap:16px; overflow-x:auto; padding-bottom:10px; }
+                .home-card { flex:0 0 auto; width:200px; }
+                .home-card-img { width:200px; height:200px; border:1px solid #202124; border-radius:4px; display:flex; align-items:center; justify-content:center; color:#cfd4d9; font-size:2rem; background:#fafafa; }
+                .filter-chip.active { background:#e8f0fe !important; border-color:#1a73e8 !important; color:#1a73e8; }
+                .qna-filter-btn.active { background:#e8f0fe !important; border-color:#1a73e8 !important; color:#1a73e8; }
+            </style>
+
+            <!-- 탐색 모드(숙소/관광/맛집): AI 추천 + 인기 장소 + 검색 결과 -->
+            <div id="homeDiscover">
+                <div id="homeSearchResultsWrap" style="display:none; margin-bottom:28px;">
+                    <h3 style="font-size:1.15rem; color:#202124; margin:0 0 12px; border-bottom:1px solid #202124; padding-bottom:6px;">검색 결과 <button onclick="clearHomeSearch()" style="margin-left:8px; font-size:0.75rem; padding:4px 10px; border:1px solid #dadce0; background:#fff; border-radius:14px; cursor:pointer;">초기화</button></h3>
+                    <div id="homeSearchResults" class="home-card-row"></div>
+                </div>
+                <h3 style="font-size:1.15rem; color:#202124; margin:0 0 14px; border-bottom:1px solid #202124; padding-bottom:6px;">TravelPlanAI 추천</h3>
+                <div id="homeAiCards" class="home-card-row" style="margin-bottom:30px;"></div>
+                <h3 style="font-size:1.15rem; color:#202124; margin:0 0 14px; border-bottom:1px solid #202124; padding-bottom:6px;">사람들이 자주 찾는 <span id="homePopularCatLabel">관광</span> 명소</h3>
+                <div id="homePopularCards" class="home-card-row"></div>
+            </div>
+
+            <!-- 루트 모드: 커뮤니티 루트 (여행 홈 '루트' 탭) -->
+            <div id="homeRoutes" style="display:none;">
             <div style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 20px;">
-                <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-                    <h2 style="font-size: 1.8rem; color: #202124; margin:0;">루트 태그</h2>
+                <div style="display:flex; align-items:center; justify-content:flex-end; gap:12px; flex-wrap:wrap;">
                     <button onclick="openAllRoutesView()" style="padding:9px 18px; border:none; background:#1a73e8; color:#fff; border-radius:24px; font-size:0.9rem; font-weight:700; cursor:pointer; white-space:nowrap; box-shadow:0 2px 6px rgba(26,115,232,.3);"><i class="fas fa-layer-group"></i> 전체 루트 보기</button>
                 </div>
                 <div class="filter-controls" style="display: flex; gap: 10px; overflow-x: auto; padding-bottom: 5px;">
@@ -192,39 +230,8 @@
                 </div>
                 <div id="allRoutesGrid" class="community-grid"></div>
             </div>
-
-            <!-- 현지 정보 게시판 (Q&A / 실시간 제보) REQ-COM-06 -->
-            <div id="qnaSection" style="margin-top: 2rem; border-top: 2px solid #e0e0e0; padding-top: 2rem;">
-                <h2 style="font-size: 1.8rem; color: #202124; margin-bottom: 6px;"> 질문 · 제보 · 후기</h2>
-
-                <!-- 작성 폼 -->
-                <div style="background:#fff; border:1px solid #e0e0e0; border-radius:12px; padding:16px; margin-bottom:20px; box-shadow:0 2px 6px rgba(0,0,0,0.05);">
-                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
-                        <select id="qnaCategory" aria-label="글 종류" style="padding:9px 12px; border:1px solid #dadce0; border-radius:8px;">
-                            <option value="question">질문</option>
-                            <option value="report">제보</option>
-                        </select>
-                        <input type="text" id="qnaRegion" placeholder="지역 (예: 경복궁 일대)" style="flex:1; min-width:140px; padding:9px 12px; border:1px solid #dadce0; border-radius:8px;">
-                        <input type="text" id="qnaTitle" placeholder="제목" style="flex:2; min-width:160px; padding:9px 12px; border:1px solid #dadce0; border-radius:8px;">
-                    </div>
-                    <textarea id="qnaQuestion" rows="2" placeholder="내용을 입력하세요." style="width:100%; padding:10px; border:1px solid #dadce0; border-radius:8px; resize:vertical; margin-bottom:10px;"></textarea>
-                    <button class="btn-google btn-google-primary" style="padding:10px 20px;" onclick="submitQnaPost()">등록</button>
-                </div>
-
-                <!-- 필터 -->
-                <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;">
-                    <button class="qna-filter-btn active" data-cat="" onclick="setQnaFilter(this, '')" style="padding:7px 16px; border:1px solid #dadce0; background:#fff; border-radius:20px; cursor:pointer; font-weight:600;">전체</button>
-                    <button class="qna-filter-btn" data-cat="question" onclick="setQnaFilter(this, 'question')" style="padding:7px 16px; border:1px solid #dadce0; background:#fff; border-radius:20px; cursor:pointer; font-weight:600;">❓ 질문</button>
-                    <button class="qna-filter-btn" data-cat="report" onclick="setQnaFilter(this, 'report')" style="padding:7px 16px; border:1px solid #dadce0; background:#fff; border-radius:20px; cursor:pointer; font-weight:600;">📢 제보</button>
-                </div>
-
-                <div id="qnaListContainer" style="display:flex; flex-direction:column; gap:12px;">
-                    <!-- 게시글 목록 -->
-                </div>
-                <style>
-                    .qna-filter-btn.active { background:#e8f0fe !important; border-color:#1a73e8 !important; color:#1a73e8; }
-                </style>
             </div>
+            <!-- /homeRoutes -->
         </section>
 
         <!-- 내가 작성한 루트 뷰 -->
@@ -233,6 +240,85 @@
             <div id="myRoutesContainer">
                 <!-- 내 글 목록 -->
             </div>
+        </section>
+
+        <!-- 여행 톡 (커뮤니티 게시판) 뷰 -->
+        <section class="community-board" id="talkView" style="display: none; flex: 1; padding: 2rem; background: var(--background-color); overflow-y: auto;">
+            <!-- 목록 모드 -->
+            <div id="talkListMode">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+                    <div style="font-size:1.5rem; font-weight:800; color:#202124;">대한민국 <span style="font-size:0.9rem; color:#5f6368;">▾</span></div>
+                    <button onclick="openTalkWrite()" style="padding:9px 22px; border:1px solid #202124; background:#fff; color:#202124; border-radius:8px; font-size:0.95rem; font-weight:700; cursor:pointer;">작성</button>
+                </div>
+
+                <!-- 지역 카드 (가로 스크롤) -->
+                <div id="talkRegionCards" style="display:flex; gap:14px; overflow-x:auto; padding-bottom:10px; margin-bottom:6px;"></div>
+
+                <hr style="border:none; border-top:3px solid #e8eaed; margin:10px 0 16px;">
+
+                <!-- 도시(지역) 필터 -->
+                <div style="margin-bottom:18px;">
+                    <select id="talkRegionFilter" onchange="onTalkRegionFilter()" style="padding:9px 16px; border:1px solid #dadce0; border-radius:20px; font-weight:600; cursor:pointer; background:#fff;">
+                        <option value="">도시 전체 ▾</option>
+                    </select>
+                </div>
+
+                <!-- 글 피드 -->
+                <div id="talkFeed"></div>
+            </div>
+
+            <!-- 상세 모드 -->
+            <div id="talkDetailMode" style="display:none; max-width:760px; margin:0 auto;">
+                <button onclick="backToTalkList()" style="margin-bottom:16px; padding:7px 14px; border:1px solid #dadce0; background:#fff; border-radius:20px; cursor:pointer; font-weight:600; font-size:0.85rem;"><i class="fas fa-arrow-left"></i> 여행 톡 목록</button>
+                <div id="talkDetailContent"></div>
+
+                <h4 style="margin:22px 0 10px; border-top:1px solid #e8eaed; padding-top:18px;">댓글 <span id="talkCommentCount" style="color:#1a73e8;"></span></h4>
+                <div id="talkCommentList" style="display:flex; flex-direction:column; gap:12px; margin-bottom:16px;"></div>
+
+                <div style="display:flex; gap:8px; align-items:center; border-top:1px solid #e8eaed; padding-top:14px;">
+                    <label for="talkCommentPhoto" title="사진 첨부" style="cursor:pointer; font-size:1.4rem; color:#5f6368;"><i class="far fa-image"></i></label>
+                    <input type="file" id="talkCommentPhoto" accept="image/*" style="display:none;" onchange="onTalkCommentPhoto(this)">
+                    <input type="text" id="talkCommentInput" placeholder="댓글을 입력하세요." style="flex:1; padding:11px 14px; border:1px solid #dadce0; border-radius:24px;" onkeydown="if(event.key==='Enter') submitTalkComment()">
+                    <button onclick="submitTalkComment()" style="padding:10px 22px; border:none; background:#1a73e8; color:#fff; border-radius:24px; font-weight:700; cursor:pointer;">등록</button>
+                </div>
+                <div id="talkCommentPhotoPreview" style="margin-top:8px;"></div>
+            </div>
+
+            <!-- 작성 모드 -->
+            <div id="talkWriteMode" style="display:none; max-width:760px; margin:0 auto;">
+                <div style="display:flex; gap:10px; margin-bottom:18px; flex-wrap:wrap;">
+                    <div style="display:flex; align-items:center; gap:6px; border:1px solid #202124; border-radius:8px; padding:6px 12px;">
+                        <input type="text" id="talkWriteRegion" placeholder="지역" style="border:none; outline:none; width:90px; font-weight:600;">
+                        <i class="fas fa-pen" style="color:#5f6368; font-size:0.8rem;"></i>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:6px; border:1px solid #202124; border-radius:8px; padding:6px 12px;">
+                        <input type="text" id="talkWritePlace" placeholder="장소" style="border:none; outline:none; width:120px; font-weight:600;">
+                        <i class="fas fa-pen" style="color:#5f6368; font-size:0.8rem;"></i>
+                    </div>
+                </div>
+
+                <input type="text" id="talkWriteTitle" placeholder="제목을 입력해주세요" style="width:100%; padding:10px 4px; border:none; border-bottom:1px solid #e8eaed; font-size:1.4rem; font-weight:700; margin-bottom:10px; outline:none;">
+                <p style="color:#5f6368; font-size:0.9rem; line-height:1.5; margin-bottom:16px;">다른 여행자들과 정보를 공유하거나 얘기를 나눠보세요.<br>등록된 글은 여행 톡에 올라가요.</p>
+
+                <textarea id="talkWriteContent" rows="8" placeholder="내용을 입력하세요." style="width:100%; padding:12px; border:1px solid #dadce0; border-radius:8px; resize:vertical; margin-bottom:14px; font-size:0.95rem; line-height:1.6;"></textarea>
+
+                <input type="file" id="talkWritePhoto" accept="image/*" multiple style="display:none;" onchange="onTalkWritePhoto(this)">
+                <div id="talkWritePhotoPreview" style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:20px;"></div>
+
+                <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid #e8eaed; padding-top:16px;">
+                    <button onclick="document.getElementById('talkWritePhoto').click()" style="padding:9px 18px; border:1px solid #dadce0; background:#fff; border-radius:8px; cursor:pointer; font-weight:600;"><i class="far fa-image"></i> 사진 업로드</button>
+                    <div style="display:flex; gap:10px;">
+                        <button onclick="backToTalkList()" style="padding:9px 20px; border:1px solid #dadce0; background:#fff; border-radius:8px; cursor:pointer; font-weight:600;">삭제</button>
+                        <button onclick="submitTalkPost()" style="padding:9px 24px; border:none; background:#1a73e8; color:#fff; border-radius:8px; cursor:pointer; font-weight:700;">등록</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 내 정보 뷰 (자리표시 — 추후 구현) -->
+        <section class="community-board" id="profileView" style="display: none; flex: 1; padding: 2rem; background: var(--background-color); overflow-y: auto;">
+            <h2>내 정보</h2>
+            <div id="profileContainer" style="margin-top:16px; color:#5f6368;"></div>
         </section>
     </main>
 
@@ -394,25 +480,6 @@
         </div>
     </div>
 
-    <!-- 모달: 현지 정보 글 상세(질문/답변·제보) REQ-COM-06 -->
-    <div id="qnaDetailModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="qnaDetailHeading">
-        <div class="modal-content" style="max-width: 560px; max-height: 85vh; overflow-y:auto;">
-            <span class="close-btn" onclick="document.getElementById('qnaDetailModal').classList.remove('active')" style="cursor:pointer;" aria-label="닫기">&times;</span>
-            <div id="qnaDetailBadge" style="margin-bottom:8px;"></div>
-            <h2 id="qnaDetailHeading" style="margin-bottom:6px; color:#202124;"></h2>
-            <div id="qnaDetailMeta" style="color:#5f6368; font-size:0.9rem; margin-bottom:14px;"></div>
-            <div id="qnaDetailBody" style="background:#f8f9fa; padding:14px; border-radius:8px; line-height:1.6; margin-bottom:20px;"></div>
-
-            <h4 style="margin-bottom:10px;">답변 · 제보 <span id="qnaAnswerCount" style="color:#1a73e8;"></span></h4>
-            <div id="qnaAnswerList" style="display:flex; flex-direction:column; gap:10px; margin-bottom:16px;"></div>
-
-            <div style="display:flex; gap:8px;">
-                <input type="text" id="qnaAnswerInput" style="flex:1; padding:10px; border:1px solid #dadce0; border-radius:8px;" placeholder="답변이나 현지 제보를 남겨주세요.">
-                <button class="btn-google btn-google-primary" onclick="submitQnaAnswer()">등록</button>
-            </div>
-        </div>
-    </div>
-
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 
@@ -527,7 +594,7 @@
         </div>
     </div>
 
-    <script src="script.js?v=2"></script>
+    <script src="script.js?v=3"></script>
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('sw.js').then(() => console.log("Service Worker Registered"));

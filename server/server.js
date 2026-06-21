@@ -9,7 +9,7 @@ const DB_FILE = 'travel.db';
 
 // 보안 미들웨어 (helmet + 화이트리스트 CORS + cookie-parser + Redis 연결)
 security.installSecurity(app);
-app.use(express.json());
+app.use(express.json({ limit: '12mb' })); // 사진(base64) 업로드 여유
 app.use(express.static(path.join(__dirname, '../web')));
 
 // DB 초기화
@@ -111,34 +111,6 @@ function initDB() {
             }
         });
 
-        db.run(`CREATE TABLE IF NOT EXISTS qna_posts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            place_id INTEGER,
-            user_id INTEGER,
-            question TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(place_id) REFERENCES places(id),
-            FOREIGN KEY(user_id) REFERENCES users(id)
-        )`, (err) => {
-            if (!err) {
-                // REQ-COM-06: 현지 정보 게시판용 보강(지역명/제목/분류)
-                db.run('ALTER TABLE qna_posts ADD COLUMN region TEXT', () => {});
-                db.run('ALTER TABLE qna_posts ADD COLUMN title TEXT', () => {});
-                db.run("ALTER TABLE qna_posts ADD COLUMN category TEXT DEFAULT 'question'", () => {}); // 'question' | 'report'
-            }
-        });
-
-        // REQ-COM-06: 질문에 대한 실시간 답변/제보
-        db.run(`CREATE TABLE IF NOT EXISTS qna_answers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            post_id INTEGER,
-            user_id INTEGER,
-            answer TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(post_id) REFERENCES qna_posts(id),
-            FOREIGN KEY(user_id) REFERENCES users(id)
-        )`);
-
         db.run(`CREATE TABLE IF NOT EXISTS user_follows (
             follower_id INTEGER,
             following_id INTEGER,
@@ -171,6 +143,41 @@ function initDB() {
             day INTEGER DEFAULT 1,
             photo TEXT,
             FOREIGN KEY(plan_id) REFERENCES community_plans(id)
+        )`);
+
+        // ===== 여행 톡(커뮤니티 게시판) 테이블 =====
+        // 지역/장소 태그 + 제목/본문 + 사진(여러 장, JSON 문자열). 좋아요·하트·댓글로 소통.
+        db.run(`CREATE TABLE IF NOT EXISTS talk_posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            region TEXT,            -- 지역 태그(예: 한강, 제주, 김해)
+            place TEXT,             -- 장소 태그(선택)
+            title TEXT,
+            content TEXT,
+            photos TEXT,            -- 업로드 사진 배열(JSON 문자열)
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )`);
+
+        db.run(`CREATE TABLE IF NOT EXISTS talk_comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER,
+            user_id INTEGER,
+            content TEXT,
+            photo TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(post_id) REFERENCES talk_posts(id),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )`);
+
+        // 반응: 한 사용자가 글마다 type별로 1개(토글). like=좋아요, heart=하트
+        db.run(`CREATE TABLE IF NOT EXISTS talk_reactions (
+            post_id INTEGER,
+            user_id INTEGER,
+            type TEXT,              -- 'like' | 'heart'
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(post_id, user_id, type),
+            FOREIGN KEY(post_id) REFERENCES talk_posts(id)
         )`);
 
         // 기본 관리자 계정 생성
@@ -236,6 +243,27 @@ function initDB() {
 
         // 실제 서울 명소로 만든 자연스러운 커뮤니티 루트들(비슷한 동선 추천 풍부화)
         seedRealisticRoutes();
+
+        // 여행 톡 예시 글(비어 있을 때만 1회 삽입)
+        seedTalkPosts();
+    });
+}
+
+// 여행 톡 예시 글 시드 — 글이 하나도 없을 때만 채운다(중복 방지).
+function seedTalkPosts() {
+    db.get('SELECT COUNT(*) c FROM talk_posts', (e, row) => {
+        if (e || !row || row.c > 0) return;
+        const samples = [
+            { uid: 2, region: '제주', place: '제주 협재해변', title: '제주 지금 날씨 어때요?',
+              content: '지금은 좀 흐리지만 오후엔 갠다고 하네요. 협재 쪽 가시는 분들 우산 챙기세요!' },
+            { uid: 1, region: '한강', place: '반포한강공원', title: '한강 추천해주세요~',
+              content: '6월 23일 강남 갈 일이 있어서 잠깐 한강 들리려고 해요.. 휠체어로 다니기 편한 코스 있을까요?' },
+            { uid: 2, region: '김해', place: '롯데워터파크 김해',
+              title: '워터파크 같이 갈 사람?', content: '이번 주말에 김해 워터파크 같이 갈 사람 구해요. 가족 단위 환영!' },
+        ];
+        const stmt = db.prepare('INSERT INTO talk_posts (user_id, region, place, title, content, photos) VALUES (?,?,?,?,?,?)');
+        samples.forEach(s => stmt.run([s.uid, s.region, s.place || '', s.title, s.content, '[]']));
+        stmt.finalize();
     });
 }
 
@@ -1394,22 +1422,54 @@ app.get('/api/accessibility/reviews', (req, res) => {
     );
 });
 
-// ===== REQ-COM-06: 현지 정보 질의응답 + 실시간 제보 게시판 =====
-// 글 목록: ?region=&category=(question|report)  - 답변 수 포함
-app.get('/api/qna', (req, res) => {
-    const region = req.query.region || '';
-    const category = req.query.category || '';
+// ===== 여행 톡(커뮤니티 게시판) API =====
+// 사진/태그 안전 변환 헬퍼
+function parsePhotos(raw) {
+    if (!raw) return [];
+    try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; }
+    catch (_) { return []; }
+}
+
+// 글 목록: ?region=&user_id=  → 반응 수(좋아요/하트)·댓글 수·내 반응 여부 포함
+app.get('/api/talk', (req, res) => {
+    const region = (req.query.region || '').trim();
+    const userId = req.query.user_id ? parseInt(req.query.user_id) : -1;
     let where = '1=1';
     const params = [];
-    if (region) { where += ' AND q.region LIKE ?'; params.push('%' + region + '%'); }
-    if (category) { where += ' AND q.category = ?'; params.push(category); }
+    if (region) { where += ' AND t.region = ?'; params.push(region); }
     db.all(
-        `SELECT q.*, u.username,
-                (SELECT COUNT(*) FROM qna_answers a WHERE a.post_id = q.id) as answer_count
-         FROM qna_posts q LEFT JOIN users u ON q.user_id = u.id
+        `SELECT t.*, u.username,
+                (SELECT COUNT(*) FROM talk_reactions r WHERE r.post_id = t.id AND r.type='like')  AS like_count,
+                (SELECT COUNT(*) FROM talk_reactions r WHERE r.post_id = t.id AND r.type='heart') AS heart_count,
+                (SELECT COUNT(*) FROM talk_comments c WHERE c.post_id = t.id)                     AS comment_count,
+                (SELECT COUNT(*) FROM talk_reactions r WHERE r.post_id = t.id AND r.type='like'  AND r.user_id = ?) AS my_like,
+                (SELECT COUNT(*) FROM talk_reactions r WHERE r.post_id = t.id AND r.type='heart' AND r.user_id = ?) AS my_heart
+         FROM talk_posts t LEFT JOIN users u ON t.user_id = u.id
          WHERE ${where}
-         ORDER BY q.id DESC`,
-        params,
+         ORDER BY t.id DESC`,
+        [userId, userId, ...params],
+        (err, rows) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json((rows || []).map(r => ({
+                ...r,
+                photos: parsePhotos(r.photos),
+                my_like: !!r.my_like,
+                my_heart: !!r.my_heart,
+            })));
+        }
+    );
+});
+
+// 지역 카드: 지역별 글 수 + 최신 글 한 줄 미리보기
+app.get('/api/talk/regions', (req, res) => {
+    db.all(
+        `SELECT region,
+                COUNT(*) AS cnt,
+                (SELECT content FROM talk_posts t2 WHERE t2.region = t.region ORDER BY t2.id DESC LIMIT 1) AS latest
+         FROM talk_posts t
+         WHERE region IS NOT NULL AND region != ''
+         GROUP BY region
+         ORDER BY MAX(t.id) DESC`,
         (err, rows) => {
             if (err) return res.status(500).json({ error: err.message });
             res.json(rows || []);
@@ -1417,14 +1477,15 @@ app.get('/api/qna', (req, res) => {
     );
 });
 
-// 글 작성: { user_id, region, title, question, category }
-app.post('/api/qna', (req, res) => {
-    const { user_id, region, title, question, category } = req.body;
-    if (!user_id || !question) return res.status(400).json({ error: 'user_id, question 필수' });
-    const cat = category === 'report' ? 'report' : 'question';
+// 글 작성: { user_id, region, place, title, content, photos:[] }
+app.post('/api/talk', (req, res) => {
+    const { user_id, region, place, title, content, photos } = req.body;
+    if (!user_id) return res.status(400).json({ error: 'user_id 필수' });
+    if (!title && !content) return res.status(400).json({ error: '제목 또는 내용을 입력하세요.' });
+    const photoStr = JSON.stringify(Array.isArray(photos) ? photos.slice(0, 8) : []);
     db.run(
-        'INSERT INTO qna_posts (user_id, region, title, question, category) VALUES (?, ?, ?, ?, ?)',
-        [user_id, region || '', title || '', question, cat],
+        'INSERT INTO talk_posts (user_id, region, place, title, content, photos) VALUES (?,?,?,?,?,?)',
+        [user_id, (region || '').trim(), (place || '').trim(), (title || '').trim(), (content || '').trim(), photoStr],
         function (err) {
             if (err) return res.status(500).json({ error: err.message });
             res.json({ status: 'ok', id: this.lastID });
@@ -1432,41 +1493,100 @@ app.post('/api/qna', (req, res) => {
     );
 });
 
-// 글 상세 + 답변/제보 목록
-app.get('/api/qna/:id', (req, res) => {
+// 글 상세 + 댓글 (반응 수/내 반응 포함): ?user_id=
+app.get('/api/talk/:id', (req, res) => {
     const postId = req.params.id;
+    const userId = req.query.user_id ? parseInt(req.query.user_id) : -1;
     db.get(
-        `SELECT q.*, u.username FROM qna_posts q LEFT JOIN users u ON q.user_id = u.id WHERE q.id = ?`,
-        [postId],
+        `SELECT t.*, u.username,
+                (SELECT COUNT(*) FROM talk_reactions r WHERE r.post_id = t.id AND r.type='like')  AS like_count,
+                (SELECT COUNT(*) FROM talk_reactions r WHERE r.post_id = t.id AND r.type='heart') AS heart_count,
+                (SELECT COUNT(*) FROM talk_reactions r WHERE r.post_id = t.id AND r.type='like'  AND r.user_id = ?) AS my_like,
+                (SELECT COUNT(*) FROM talk_reactions r WHERE r.post_id = t.id AND r.type='heart' AND r.user_id = ?) AS my_heart
+         FROM talk_posts t LEFT JOIN users u ON t.user_id = u.id WHERE t.id = ?`,
+        [userId, userId, postId],
         (err, post) => {
             if (err) return res.status(500).json({ error: err.message });
             if (!post) return res.status(404).json({ error: '게시글을 찾을 수 없습니다.' });
+            post.photos = parsePhotos(post.photos);
+            post.my_like = !!post.my_like;
+            post.my_heart = !!post.my_heart;
             db.all(
-                `SELECT a.*, u.username FROM qna_answers a LEFT JOIN users u ON a.user_id = u.id
-                 WHERE a.post_id = ? ORDER BY a.id ASC`,
+                `SELECT c.*, u.username FROM talk_comments c LEFT JOIN users u ON c.user_id = u.id
+                 WHERE c.post_id = ? ORDER BY c.id ASC`,
                 [postId],
-                (err, answers) => {
-                    if (err) return res.status(500).json({ error: err.message });
-                    res.json({ post, answers: answers || [] });
+                (err2, comments) => {
+                    if (err2) return res.status(500).json({ error: err2.message });
+                    res.json({ post, comments: comments || [] });
                 }
             );
         }
     );
 });
 
-// 답변/제보 작성: { user_id, answer }
-app.post('/api/qna/:id/answer', (req, res) => {
+// 댓글 작성: { user_id, content, photo? }
+app.post('/api/talk/:id/comment', (req, res) => {
     const postId = req.params.id;
-    const { user_id, answer } = req.body;
-    if (!user_id || !answer) return res.status(400).json({ error: 'user_id, answer 필수' });
+    const { user_id, content, photo } = req.body;
+    if (!user_id || !content) return res.status(400).json({ error: 'user_id, content 필수' });
     db.run(
-        'INSERT INTO qna_answers (post_id, user_id, answer) VALUES (?, ?, ?)',
-        [postId, user_id, answer],
+        'INSERT INTO talk_comments (post_id, user_id, content, photo) VALUES (?,?,?,?)',
+        [postId, user_id, content.trim(), photo || ''],
         function (err) {
             if (err) return res.status(500).json({ error: err.message });
             res.json({ status: 'ok', id: this.lastID });
         }
     );
+});
+
+// 반응 토글: { user_id, type:'like'|'heart' } → 적용 후 최신 카운트/내 상태 반환
+app.post('/api/talk/:id/reaction', (req, res) => {
+    const postId = req.params.id;
+    const { user_id, type } = req.body;
+    if (!user_id || !['like', 'heart'].includes(type)) {
+        return res.status(400).json({ error: 'user_id, type(like|heart) 필수' });
+    }
+    db.get('SELECT 1 FROM talk_reactions WHERE post_id=? AND user_id=? AND type=?', [postId, user_id, type], (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        const after = (e2) => {
+            if (e2) return res.status(500).json({ error: e2.message });
+            db.get(
+                `SELECT (SELECT COUNT(*) FROM talk_reactions WHERE post_id=? AND type='like')  AS like_count,
+                        (SELECT COUNT(*) FROM talk_reactions WHERE post_id=? AND type='heart') AS heart_count`,
+                [postId, postId],
+                (e3, counts) => {
+                    if (e3) return res.status(500).json({ error: e3.message });
+                    res.json({ status: 'ok', active: !row, type, ...counts });
+                }
+            );
+        };
+        if (row) {
+            db.run('DELETE FROM talk_reactions WHERE post_id=? AND user_id=? AND type=?', [postId, user_id, type], after);
+        } else {
+            db.run('INSERT INTO talk_reactions (post_id, user_id, type) VALUES (?,?,?)', [postId, user_id, type], after);
+        }
+    });
+});
+
+// 글 삭제: { user_id, user_role } — 작성자 본인 또는 admin
+app.delete('/api/talk/:id', (req, res) => {
+    const postId = req.params.id;
+    const { user_id, user_role } = req.body;
+    db.get('SELECT user_id FROM talk_posts WHERE id = ?', [postId], (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!row) return res.status(404).json({ error: '게시글을 찾을 수 없습니다.' });
+        if (user_role !== 'admin' && row.user_id !== user_id) {
+            return res.status(403).json({ error: '삭제 권한이 없습니다.' });
+        }
+        db.serialize(() => {
+            db.run('DELETE FROM talk_comments WHERE post_id = ?', [postId]);
+            db.run('DELETE FROM talk_reactions WHERE post_id = ?', [postId]);
+            db.run('DELETE FROM talk_posts WHERE id = ?', [postId], function (e2) {
+                if (e2) return res.status(500).json({ error: e2.message });
+                res.json({ status: 'ok' });
+            });
+        });
+    });
 });
 
 // 404 + Global Exception 핸들러 (모든 라우트 등록 뒤에 위치해야 함)

@@ -1,5 +1,5 @@
 // 캐시 버전을 올리면 activate 시 옛 캐시가 삭제됩니다. (수정 후 반드시 버전 증가)
-const CACHE_NAME = 'travelplan-v3';
+const CACHE_NAME = 'travelplan-v4';
 const urlsToCache = [
   '/',
   '/index.html',
