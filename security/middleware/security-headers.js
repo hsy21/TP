@@ -10,6 +10,8 @@ function securityHeaders() {
     return helmet({
         contentSecurityPolicy: false,        // 프론트 인라인 스크립트 충돌 방지(추후 강화)
         crossOriginEmbedderPolicy: false,
+        // OSM 타일 서버는 Referer 가 없으면 403 으로 차단하므로 origin 만 전달한다.
+        referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
     });
 }
 

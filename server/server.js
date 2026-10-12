@@ -100,6 +100,9 @@ function initDB() {
             space_width INTEGER, -- 1-5 scale
             photo TEXT,
             comment TEXT,
+            access_tags TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            rating INTEGER,
             FOREIGN KEY(place_id) REFERENCES places(id),
             FOREIGN KEY(user_id) REFERENCES users(id)
         )`, (err) => {
